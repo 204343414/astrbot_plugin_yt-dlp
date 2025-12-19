@@ -12,7 +12,7 @@
 ## 📦 安装说明
 
 ### 轻量安装 (需自行配置 FFmpeg)
-0. 定位AstrBot\venv\Scripts\python.exe的文件位置，cmd或PowerShell执行器执行& "AstrBot\venv\Scripts\python.exe" -m pip install yt-dlp安装yt-dlp库
+0. 定位AstrBot\venv\Scripts\python.exe的文件位置，cmd或PowerShell执行器执行& "...\AstrBot\venv\Scripts\python.exe" -m pip install yt-dlp安装yt-dlp库
 1. 将文件夹放入 `AstrBot/data/plugins/` 目录。
 2. 确保你的电脑/服务器已安装 `FFmpeg` 并配置了环境变量。
 3. https://www.gyan.dev/ffmpeg/builds/官网下载包后把ffmpeg压缩包内的ffmpeg.exe和ffprobe.exe放入插件同一目录内。
