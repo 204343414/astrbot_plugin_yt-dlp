@@ -39,6 +39,12 @@
         "type": "int",
         "default": 60,
         "hint": "下载的视频文件多久后自动删除，设置太短可能导致发送失败"
+      },
+      "prefer_h264": {
+        "description": "优先 H.264 编码",
+        "type": "bool",
+        "default": true,
+        "hint": "H.264 兼容性最好，关闭后可能下载 VP9/AV1 编码（部分设备无法播放）"
       }
     }
   },
@@ -56,7 +62,13 @@
         "description": "自定义 FFmpeg 路径",
         "type": "string",
         "default": "",
-        "hint": "留空则自动寻找，填写示例: C:/ffmpeg/bin/ffmpeg.exe"
+        "hint": "留空则自动寻找，填写示例: C:/ffmpeg/bin/ffmpeg.exe 或 /usr/bin/ffmpeg"
+      },
+      "use_system_path": {
+        "description": "搜索系统 PATH",
+        "type": "bool",
+        "default": true,
+        "hint": "当内置和自定义路径都找不到时，是否在系统 PATH 中搜索 ffmpeg"
       }
     }
   }
