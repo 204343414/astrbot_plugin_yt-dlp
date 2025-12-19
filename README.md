@@ -8,7 +8,7 @@
 *   **全平台支持**：完美支持 **Bilibili** (自动合并音画)、**YouTube** (最高720p)、**Twitter/X**、**TikTok** 等主流平台。
 *   **智能下载**：自动选择最适合 QQ 发送的画质，避免文件过大发送失败。
 *   **无感体验**：支持解析短链接（b23.tv, youtu.be），自动识别 URL。
-    
+    源库依赖 https://github.com/yt-dlp/yt-dlp
 ## 📦 安装说明
 
 ### 轻量安装 (需自行配置 FFmpeg)
