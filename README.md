@@ -8,22 +8,15 @@
 *   **全平台支持**：完美支持 **Bilibili** (自动合并音画)、**YouTube** (最高720p)、**Twitter/X**、**TikTok** 等主流平台。
 *   **智能下载**：自动选择最适合 QQ 发送的画质，避免文件过大发送失败。
 *   **无感体验**：支持解析短链接（b23.tv, youtu.be），自动识别 URL。
-*   **懒人模式**：插件内可集成 FFmpeg，无需配置系统环境变量，解压即用（需下载完整版）。
-    https://www.gyan.dev/ffmpeg/builds/
+    
 ## 📦 安装说明
 
-### 方法一：轻量安装 (需自行配置 FFmpeg)
+### 轻量安装 (需自行配置 FFmpeg)
+0. 定位AstrBot\venv\Scripts\python.exe的文件位置，cmd或PowerShell执行器执行& "AstrBot\venv\Scripts\python.exe" -m pip install yt-dlp安装yt-dlp库
 1. 将文件夹放入 `AstrBot/data/plugins/` 目录。
 2. 确保你的电脑/服务器已安装 `FFmpeg` 并配置了环境变量。
-3. 把ffmpeg压缩包内的ffmpeg.exe和ffprobe.exe放入插件同一目录内。
+3. https://www.gyan.dev/ffmpeg/builds/官网下载包后把ffmpeg压缩包内的ffmpeg.exe和ffprobe.exe放入插件同一目录内。
 4. 重启 AstrBot。
-
-### 方法二：懒人安装 (推荐)
-1. 下载插件完整包。
-2. 确保插件目录 `astrbot_plugin_yt-dlp/` 下包含 `ffmpeg.exe` 文件。
-3. 将文件夹放入 `AstrBot/data/plugins/` 目录。
-4. 把ffmpeg压缩包内的ffmpeg.exe和ffprobe.exe放入插件同一目录内。
-5. 重启 AstrBot。
 
 > **注意**：如果不安装 FFmpeg，B站视频将无法下载（因为 B站 高清视频是音画分离的，需要 FFmpeg 合并）。
 
