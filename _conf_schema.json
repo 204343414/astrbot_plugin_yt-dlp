@@ -1,0 +1,63 @@
+{
+  "proxy": {
+    "description": "HTTP 代理设置",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用代理",
+        "type": "bool",
+        "default": false,
+        "hint": "如果需要下载 YouTube、Twitter 等海外视频，请开启并配置代理"
+      },
+      "url": {
+        "description": "代理地址",
+        "type": "string",
+        "default": "http://127.0.0.1:7890",
+        "hint": "格式: http://IP:端口，常见端口有 7890 (Clash)、10809 (V2Ray)、1080 (Shadowsocks)"
+      }
+    }
+  },
+  "download": {
+    "description": "下载设置",
+    "type": "object",
+    "items": {
+      "max_quality": {
+        "description": "最高画质",
+        "type": "string",
+        "default": "720p",
+        "options": ["480p", "720p", "1080p"],
+        "hint": "限制视频最高画质，画质越高文件越大，可能发送失败"
+      },
+      "max_size_mb": {
+        "description": "最大文件大小 (MB)",
+        "type": "int",
+        "default": 50,
+        "hint": "超过此大小的视频将不会下载，QQ 一般限制 100MB"
+      },
+      "auto_delete_seconds": {
+        "description": "临时文件清理时间 (秒)",
+        "type": "int",
+        "default": 60,
+        "hint": "下载的视频文件多久后自动删除，设置太短可能导致发送失败"
+      }
+    }
+  },
+  "ffmpeg": {
+    "description": "FFmpeg 设置",
+    "type": "object",
+    "items": {
+      "use_builtin": {
+        "description": "使用内置 FFmpeg",
+        "type": "bool",
+        "default": true,
+        "hint": "如果插件自带了 ffmpeg.exe，优先使用内置版本"
+      },
+      "custom_path": {
+        "description": "自定义 FFmpeg 路径",
+        "type": "string",
+        "default": "",
+        "hint": "留空则自动寻找，填写示例: C:/ffmpeg/bin/ffmpeg.exe"
+      }
+    }
+  }
+}
