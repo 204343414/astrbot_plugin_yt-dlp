@@ -14,39 +14,34 @@ from http.server import SimpleHTTPRequestHandler, HTTPServer
 from astrbot.api.all import *
 from astrbot.api.message_components import Video, Plain, File
 
-@register("yt_dlp_plugin", "YourName", "全能视频下载助手", "2.4.0")
+@register("yt_dlp_plugin", "YourName", "全能视频下载助手", "3.2.0-MaxQuality")
 class YtDlpPlugin(Star):
     def __init__(self, context: Context, config: dict, *args, **kwargs):
         super().__init__(context)
         self.logger = logging.getLogger("astrbot_plugin_yt_dlp")
+        self.logger.info("🔥 正在加载最高画质修复版 (v3.2)...") 
         self.config = config
         
-        # 1. 基础路径
         self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
         self.temp_dir = os.path.join(self.plugin_dir, "temp")
-        if not os.path.exists(self.temp_dir):
-            os.makedirs(self.temp_dir)
+        if not os.path.exists(self.temp_dir): os.makedirs(self.temp_dir)
             
-        # 2. 寻找 FFmpeg
         try:
             self.ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-            self.logger.info(f"已加载 FFmpeg: {self.ffmpeg_exe}")
-        except Exception as e:
+        except:
             self.ffmpeg_exe = "ffmpeg"
-            self.logger.warning(f"imageio-ffmpeg 加载失败: {e}")
             
-        # 3. 基础配置
         self.proxy_enabled = self.config.get("proxy", {}).get("enabled", False)
         self.proxy_url = self.config.get("proxy", {}).get("url", "")
-        self.max_quality = self.config.get("download", {}).get("max_quality", "720p")
-        self.max_size_mb = self.config.get("download", {}).get("max_size_mb", 50) # 默认改小一点
+        # 默认画质改为最高，为了体验原版
+        self.max_quality = self.config.get("download", {}).get("max_quality", "最高画质")
+        self.max_size_mb = self.config.get("download", {}).get("max_size_mb", 100)
         self.delete_seconds = self.config.get("download", {}).get("auto_delete_seconds", 60)
         
-        # 4. 启动内置 HTTP 服务器
         self.server_port = 0 
         self.server_ip = self._get_local_ip()
         self._start_http_server()
-        self.logger.info(f"文件服务器已启动: http://{self.server_ip}:{self.server_port}")
+        self.logger.info(f"文件服务器: http://{self.server_ip}:{self.server_port}")
 
     def _get_local_ip(self):
         try:
@@ -55,15 +50,13 @@ class YtDlpPlugin(Star):
             ip = s.getsockname()[0]
             s.close()
             return ip
-        except Exception:
-            return "127.0.0.1"
+        except: return "127.0.0.1"
 
     def _start_http_server(self):
         class TempDirHandler(SimpleHTTPRequestHandler):
             def __init__(handler_self, *args, **kwargs):
                 super().__init__(*args, directory=self.temp_dir, **kwargs)
-            def log_message(self, format, *args):
-                pass
+            def log_message(self, format, *args): pass
 
         def run_server():
             server = HTTPServer(('0.0.0.0', 0), TempDirHandler)
@@ -74,238 +67,156 @@ class YtDlpPlugin(Star):
         t.start()
         time.sleep(0.5)
 
-    @command("check_env")
-    async def cmd_check_env(self, event: AstrMessageEvent):
-        """诊断插件环境"""
-        yield event.plain_result(f"🔍 环境诊断:\nFFmpeg: {self.ffmpeg_exe}\nServer: http://{self.server_ip}:{self.server_port}")
-
     def _sanitize_filename(self, name: str) -> str:
         if not name: return "video"
         name = re.sub(r'[\\/*?:"<>|]', '_', name)
-        name = name.replace('\n', ' ').replace('\r', '')
-        return name[:50].strip()
+        return name.replace('\n', ' ').replace('\r', '')[:50].strip()
 
     def _format_size(self, size_bytes):
         if size_bytes is None: return "未知"
         if size_bytes < 1024: return f"{size_bytes} B"
-        elif size_bytes < 1024 * 1024: return f"{size_bytes / 1024:.2f} KB"
-        elif size_bytes < 1024 * 1024 * 1024: return f"{size_bytes / (1024 * 1024):.2f} MB"
-        else: return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+        elif size_bytes < 1024**2: return f"{size_bytes/1024:.2f} KB"
+        elif size_bytes < 1024**3: return f"{size_bytes/1024**2:.2f} MB"
+        else: return f"{size_bytes/1024**3:.2f} GB"
 
-    async def _manual_merge(self, video_path, audio_path, output_path):
-        cmd = [self.ffmpeg_exe, "-i", video_path, "-i", audio_path, "-c:v", "copy", "-c:a", "copy", "-y", output_path]
+    async def _manual_merge(self, v, a, out):
+        # 使用 copy 模式无损合并，速度快且保持原画质
+        cmd = [self.ffmpeg_exe, "-i", v, "-i", a, "-c:v", "copy", "-c:a", "copy", "-y", out]
         def _run():
             startupinfo = None
             if os.name == 'nt':
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            # 捕获 stderr 以便调试
             return subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo)
         
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, _run)
-        if result.returncode != 0:
-            raise Exception(f"合并失败: {result.stderr[:100]}")
-        return output_path
+        res = await asyncio.get_running_loop().run_in_executor(None, _run)
+        if res.returncode != 0:
+            # 如果 copy 失败（编码不兼容），尝试转码合并 (会导致变慢但能成功)
+            self.logger.warning(f"无损合并失败，尝试重编码合并: {res.stderr[:200]}")
+            cmd_re = [self.ffmpeg_exe, "-i", v, "-i", a, "-q:v", "2", "-y", out]
+            res = await asyncio.get_running_loop().run_in_executor(None, lambda: subprocess.run(cmd_re, capture_output=True))
+            if res.returncode != 0:
+                raise Exception("合并完全失败")
 
     async def _get_video_info_safe(self, url):
-        ydl_opts = {"quiet": True, "no_warnings": True, "nocheckcertificate": True, "extract_flat": False}
-        if self.proxy_enabled and self.proxy_url: ydl_opts["proxy"] = self.proxy_url
+        opts = {"quiet":True, "no_warnings":True, "nocheckcertificate":True}
+        if self.proxy_enabled: opts["proxy"] = self.proxy_url
         try:
-            loop = asyncio.get_running_loop()
-            info = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(ydl_opts).extract_info(url, download=False))
-            filesize = info.get('filesize') or info.get('filesize_approx')
-            if not filesize and info.get('formats'):
-                for fmt in info.get('formats', []):
-                    filesize = max(filesize or 0, fmt.get('filesize', 0) or fmt.get('filesize_approx', 0))
-            return {
-                'title': info.get('title', ''), 'duration': info.get('duration'),
-                'filesize': filesize, 'resolution': info.get('resolution'), 'uploader': info.get('uploader'),
-            }
-        except Exception as e:
-            self.logger.error(f"Info Error: {e}")
-            return None
+            info = await asyncio.get_running_loop().run_in_executor(None, lambda: yt_dlp.YoutubeDL(opts).extract_info(url, download=False))
+            sz = info.get('filesize') or info.get('filesize_approx')
+            return {'title':info.get('title',''), 'duration':info.get('duration'), 'filesize':sz}
+        except: return None
 
-    async def _check_content_safety_llm(self, title: str):
-        provider = self.context.get_using_provider()
-        if not provider: return True
-        prompt = f"审核标题：{title}\n包含政治敏感/反动/严重色情/严重暴恐吗？\n包含回复UNSAFE，否则回复SAFE。仅回复一个单词。"
-        try:
-            response = await provider.text_chat(prompt, session_id=None)
-            ans = response if isinstance(response, str) else response.completion_text
-            if "UNSAFE" in str(ans).upper(): return False
-            return True
-        except: return True
-
-    async def _download_stream(self, url, format_str, filename_tmpl):
-        ydl_opts = {
-            "outtmpl": filename_tmpl, "format": format_str, "noplaylist": True,
-            "quiet": True, "no_warnings": True, "nocheckcertificate": True,
-            "ffmpeg_location": self.ffmpeg_exe, 
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-        if self.proxy_enabled and self.proxy_url: ydl_opts["proxy"] = self.proxy_url
-        loop = asyncio.get_running_loop()
+    async def _download_stream(self, url, fmt, tmpl):
+        # 关键：ffmpeg_location 设为 None，禁止 yt-dlp 自动合并，我们自己来
+        opts = {"outtmpl":tmpl, "format":fmt, "noplaylist":True, "quiet":True, "ffmpeg_location":None}
+        if self.proxy_enabled: opts["proxy"] = self.proxy_url
         def _task():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 return ydl.prepare_filename(info), info
-        return await loop.run_in_executor(None, _task)
+        return await asyncio.get_running_loop().run_in_executor(None, _task)
 
-    async def _core_download_handler(self, event: AstrMessageEvent, url: str, send_method: str, content_type: str = "merged"):
-        if not url and send_method != "tool_auto": 
-            yield event.plain_result(f"Usage: /download <URL>")
-            return
-
-        mode_text = "纯音频" if content_type == "audio_only" else "音画合并"
-        yield event.plain_result(f"⏳ 正在获取视频信息...")
+    async def _core_download_handler(self, event: AstrMessageEvent, url: str, method: str, ctype: str):
+        if not url: return
+        yield event.plain_result(f"⏳ 获取信息中...")
+        info = await self._get_video_info_safe(url)
+        if info: yield event.plain_result(f"📹 {info['title'][:20]}...\n📦 {self._format_size(info['filesize'])}\n⏳ 下载中...")
         
-        video_info = await self._get_video_info_safe(url)
-        if video_info:
-            est_size = self._format_size(video_info.get('filesize'))
-            duration = video_info.get('duration') or 0
-            yield event.plain_result(f"📹 标题: {video_info.get('title')[:30]}\n⏱️ 时长: {int(duration//60)}分{int(duration%60)}秒\n📦 预估: {est_size}\n⏳ 开始下载...")
+        ts = int(time.time())
+        # 分离视频和音频的临时文件
+        v_tmpl = f"{self.temp_dir}/v_{ts}_%(id)s.%(ext)s"
+        a_tmpl = f"{self.temp_dir}/a_{ts}_%(id)s.%(ext)s"
+        
+        # ========== 画质选择逻辑 ==========
+        limit = self.max_quality
+        # 优先选择 mp4 容器的视频流 (兼容性好)，如果没有则选最佳
+        if limit == "最高画质":
+            self.logger.info("模式: 最高画质")
+            fmt_v = "bestvideo[ext=mp4]/bestvideo"
         else:
-            yield event.plain_result(f"⏳ 开始下载...")
-
-        timestamp_id = int(time.time())
-        video_tmpl = f"{self.temp_dir}/v_{timestamp_id}_%(id)s.%(ext)s"
-        audio_tmpl = f"{self.temp_dir}/a_{timestamp_id}_%(id)s.%(ext)s"
+            self.logger.info(f"模式: 限制 {limit}")
+            h = int(limit.replace("p", ""))
+            fmt_v = f"bestvideo[ext=mp4][height<={h}]/bestvideo[height<={h}]"
         
-        quality_map = { "480p": 480, "720p": 720, "1080p": 1080, "最高画质": None }
-        max_height = quality_map.get(self.max_quality, 720)
-        fmt_video = f"bestvideo[vcodec^=avc1][height<=?{max_height}]" if max_height else "bestvideo[vcodec^=avc1]"
-        fmt_fallback = "best"
-        fmt_audio = "bestaudio[acodec^=mp4a]/bestaudio"
-
-        final_file_path = None
-        video_title = "media"
-        temp_files_to_clean = []
+        fmt_a = "bestaudio[ext=m4a]/bestaudio" # 音频优先 m4a (AAC)
 
         try:
-            if content_type == "audio_only":
-                a_path, a_info = await self._download_stream(url, fmt_audio, audio_tmpl)
-                video_title = a_info.get('title', 'audio')
-                final_file_path = a_path 
+            final_path = None
+            temp_files = []
+
+            if ctype == "audio_only":
+                final_path, _ = await self._download_stream(url, fmt_a, a_tmpl)
             else:
-                try:
-                    v_path, v_info = await self._download_stream(url, fmt_video, video_tmpl)
-                    video_title = v_info.get('title', 'video')
-                    temp_files_to_clean.append(v_path)
-                    a_path, a_info = await self._download_stream(url, fmt_audio, audio_tmpl)
-                    temp_files_to_clean.append(a_path)
+                # 1. 下载视频流
+                v_path, v_info = await self._download_stream(url, fmt_v, v_tmpl)
+                temp_files.append(v_path)
+                
+                # 2. 下载音频流
+                a_path, a_info = await self._download_stream(url, fmt_a, a_tmpl)
+                temp_files.append(a_path)
+                
+                # 3. 手动合并
+                yield event.plain_result("⚙️ 正在无损合并...")
+                # 输出文件强制 mp4
+                out_path = os.path.join(self.temp_dir, f"final_{ts}.mp4")
+                await self._manual_merge(v_path, a_path, out_path)
+                final_path = out_path
+
+            if not final_path or not os.path.exists(final_path): raise Exception("文件生成失败")
+            
+            # 检查大小
+            fsize_mb = os.path.getsize(final_path) / (1024 * 1024)
+            if fsize_mb > self.max_size_mb:
+                 yield event.plain_result(f"❌ 文件过大 ({fsize_mb:.1f}MB)，已停止发送。")
+                 # 可以在这里加个逻辑：如果过大，尝试压缩，但那样太慢了
+            else:
+                fname = os.path.basename(final_path)
+                furl = f"http://{self.server_ip}:{self.server_port}/{fname}"
+                
+                if method == "file":
+                    # 智能 ID 获取逻辑
+                    tid = None
+                    is_group = False
                     
-                    yield event.plain_result("⚙️ 正在合并...")
-                    output_path = os.path.join(self.temp_dir, f"final_{timestamp_id}.mp4")
-                    await self._manual_merge(v_path, a_path, output_path)
-                    final_file_path = output_path
-                except Exception:
-                    f_path, f_info = await self._download_stream(url, fmt_fallback, video_tmpl)
-                    video_title = f_info.get('title', 'video')
-                    final_file_path = f_path
-
-            if not final_file_path or not os.path.exists(final_file_path):
-                raise Exception("文件生成失败")
-
-            file_size_mb = os.path.getsize(final_file_path) / (1024 * 1024)
-            if file_size_mb > self.max_size_mb:
-                yield event.plain_result(f"❌ 文件过大 ({file_size_mb:.2f}MB > {self.max_size_mb}MB)")
-                return
-
-            yield event.plain_result(f"✅ 下载完成 ({file_size_mb:.2f}MB)\n📤 正在上传...")
-            
-            # ========== 核心发送逻辑修正 ==========
-            file_name = os.path.basename(final_file_path)
-            file_url = f"http://{self.server_ip}:{self.server_port}/{file_name}"
-            self.logger.info(f"推送链接: {file_url}")
-
-            if send_method == "file":
-                # 文件模式：直接调用 API 上传，不走 File 组件
-                safe_title = self._sanitize_filename(video_title)
-                ext = os.path.splitext(final_file_path)[1]
-                full_name = f"{safe_title}{ext}"
-                
-                # 获取 Session ID
-                is_group = False
-                target_id = None
-                
-                if hasattr(event, 'message_obj'):
-                    raw_msg = event.message_obj
-                    if hasattr(raw_msg, 'group_id') and raw_msg.group_id:
-                        is_group = True
-                        target_id = raw_msg.group_id
-                    elif hasattr(raw_msg, 'user_id'):
-                        target_id = raw_msg.user_id
-                
-                if target_id:
-                    try:
-                        action = "upload_group_file" if is_group else "upload_private_file"
-                        params = {
-                            "group_id" if is_group else "user_id": int(target_id),
-                            "file": file_url,
-                            "name": full_name
-                        }
-                        self.logger.info(f"调用 API: {action} {params}")
-                        await event.bot.call_action(action, **params)
-                        # yield event.plain_result("✅ 上传请求已发送")
-                    except Exception as e:
-                        yield event.plain_result(f"❌ 上传 API 失败: {e}")
+                    if hasattr(event, 'message_obj'):
+                        msg = event.message_obj
+                        if getattr(msg, 'group_id', None):
+                            is_group = True
+                            tid = msg.group_id
+                        elif getattr(msg, 'user_id', None):
+                            tid = msg.user_id
+                    
+                    if not tid: tid = event.session_id # 保底
+                    
+                    if tid:
+                        act = "upload_group_file" if is_group else "upload_private_file"
+                        key = "group_id" if is_group else "user_id"
+                        self.logger.info(f"API调用: {act} -> {tid}")
+                        await event.bot.call_action(act, **{key: int(tid), "file": furl, "name": fname})
+                    else:
+                        yield event.plain_result("❌ 无法获取目标ID")
                 else:
-                    yield event.plain_result("❌ 无法获取上传目标 ID")
-            else:
-                # 视频模式：Video组件对URL支持较好，可以直接用
-                yield event.chain_result([Video(file=file_url, url=file_url)])
+                    yield event.chain_result([Video(file=furl, url=furl)])
             
-            # ========== 结束 ==========
-
-            async def _cleanup():
-                await asyncio.sleep(self.delete_seconds + 30)
-                try: 
-                    if os.path.exists(final_file_path): os.remove(final_file_path) 
-                except: pass
-                for f in temp_files_to_clean:
-                    try: os.remove(f)
-                    except: pass
-            asyncio.create_task(_cleanup())
+            # 清理垃圾
+            async def _clean():
+                await asyncio.sleep(self.delete_seconds+20)
+                if os.path.exists(final_path): os.remove(final_path)
+                for f in temp_files:
+                    if os.path.exists(f): os.remove(f)
+            asyncio.create_task(_clean())
 
         except Exception as e:
-            self.logger.error(f"Error: {e}", exc_info=True)
-            yield event.plain_result(f"❌ 错误: {str(e)[:50]}")
-
-    @llm_tool(name="download_video")
-    async def cmd_llm_download_video(self, event: AstrMessageEvent, url: str, mode: str = "video_stream"):
-        '''下载视频工具 (mode: "video_stream", "video_file", "audio_only")'''
-        yield event.plain_result("🔍 安全检查中...")
-        info = await self._get_video_info_safe(url)
-        if info and not await self._check_content_safety_llm(info.get('title')):
-            yield event.plain_result("⚠️ 包含敏感内容，已拦截。")
-            return
-
-        method = "file" if mode in ["video_file", "audio_only"] else "video"
-        ctype = "audio_only" if mode == "audio_only" else "merged"
-        
-        async for res in self._core_download_handler(event, url, method, ctype):
-            yield res
+            self.logger.error(f"Err: {e}")
+            yield event.plain_result(f"❌ 错误: {e}")
 
     @command("download")
     async def cmd_download_file(self, event: AstrMessageEvent, url: str = ""):
-        """下载文件"""
-        async for res in self._core_download_handler(event, url, "file", "merged"):
-            yield res
+        async for res in self._core_download_handler(event, url, "file", "merged"): yield res
 
     @command("video")
     async def cmd_download_video(self, event: AstrMessageEvent, url: str = ""):
-        """下载视频"""
-        async for res in self._core_download_handler(event, url, "video", "merged"):
-            yield res
-            
-    @command("extract")
-    async def cmd_extract_url(self, event: AstrMessageEvent, url: str = ""):
-        """提取直链"""
-        if not url: return
-        ydl_opts = {"quiet": True}
-        if self.proxy_enabled: ydl_opts["proxy"] = self.proxy_url
-        try:
-            info = await asyncio.get_running_loop().run_in_executor(None, lambda: yt_dlp.YoutubeDL(ydl_opts).extract_info(url, download=False))
-            yield event.plain_result(f"🔗 {info.get('url')}")
-        except Exception as e:
-            yield event.plain_result(f"❌ {e}")
+        async for res in self._core_download_handler(event, url, "video", "merged"): yield res
+EOF
