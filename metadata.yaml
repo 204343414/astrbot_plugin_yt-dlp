@@ -4,7 +4,7 @@ display_name: 全能视频直链提取器
 # 描述
 description: 基于本地 yt-dlp 的全能视频解析插件，支持油管、B站等。
 # 版本号
-version: 1.0.0
+version: 1.0.1
 # 作者
 author: ハ·7
 # 插件的仓库地址
