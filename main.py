@@ -7,7 +7,10 @@ import glob
 import re
 import subprocess
 import imageio_ffmpeg  # 新增这一行
-import shutil  # 新增这一行
+import shutil
+import socket
+import threading
+from http.server import SimpleHTTPRequestHandler, HTTPServer
 from astrbot.api.all import *
 from astrbot.api.message_components import Video, Plain, File
 
@@ -37,8 +40,47 @@ class YtDlpPlugin(Star):
         self.proxy_url = self.config.get("proxy", {}).get("url", "")
         self.max_quality = self.config.get("download", {}).get("max_quality", "720p")
         self.max_size_mb = self.config.get("download", {}).get("max_size_mb", 512)
-        self.delete_seconds = self.config.get("download", {}).get("auto_delete_seconds", 60)
+        # ========== 新增：启动内置 HTTP 服务器 ==========
+        self.server_port = 0 # 0 代表自动分配空闲端口
+        self.server_ip = self._get_local_ip()
+        self._start_http_server()
+        self.logger.info(f"文件服务器已启动: http://{self.server_ip}:{self.server_port}")
 
+    def _get_local_ip(self):
+        """获取本机 IP（容器内 IP）"""
+        try:
+            # 这是一个不用真正连接就能获取本机内网 IP 的技巧
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    def _start_http_server(self):
+        """在后台启动 HTTP 服务器，只服务 temp 目录"""
+        class TempDirHandler(SimpleHTTPRequestHandler):
+            def __init__(handler_self, *args, **kwargs):
+                # 强制指定目录为 temp_dir
+                super().__init__(*args, directory=self.temp_dir, **kwargs)
+            
+            # 屏蔽日志输出，免得刷屏
+            def log_message(self, format, *args):
+                pass
+
+        def run_server():
+            # 端口为 0 时会自动分配一个可用端口
+            server = HTTPServer(('0.0.0.0', 0), TempDirHandler)
+            self.server_port = server.server_port # 获取实际分配的端口
+            server.serve_forever()
+
+        # 守护线程启动，随主程序退出而退出
+        t = threading.Thread(target=run_server, daemon=True)
+        t.start()
+        # 等待一小会儿确保端口已分配
+        time.sleep(0.5)    
+    
     @command("check_env")
     async def cmd_check_env(self, event: AstrMessageEvent):
         """诊断 FFmpeg 环境"""
@@ -312,8 +354,24 @@ class YtDlpPlugin(Star):
             
             abs_path = os.path.abspath(final_file_path)
             
+            # ========== 修改：通过 HTTP URL 发送 ==========
+            # 获取文件名（例如 v_12345.mp4）
+            file_name = os.path.basename(final_file_path)
+            # 构造 URL，例如 http://172.17.0.2:45678/v_12345.mp4
+            file_url = f"http://{self.server_ip}:{self.server_port}/{file_name}"
+            
+            self.logger.info(f"推送媒体链接: {file_url}")
+
             if send_method == "file":
                 safe_title = self._sanitize_filename(video_title)
+                ext = os.path.splitext(abs_path)[1]
+                # 注意：file=file_url，直接传链接
+                yield event.chain_result([File(name=f"{safe_title}{ext}", file=file_url)])
+            else:
+                # 视频模式
+                yield event.chain_result([Video(file=file_url)])
+            
+            # ========== 结束 ==========
                 ext = os.path.splitext(abs_path)[1]
                 yield event.chain_result([File(file=abs_path, name=f"{safe_title}{ext}")])
             else:
