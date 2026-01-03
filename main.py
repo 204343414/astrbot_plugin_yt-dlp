@@ -6,7 +6,7 @@ import yt_dlp
 import glob
 import re
 import subprocess
-import imageio_ffmpeg  # 新增这一行
+import imageio_ffmpeg
 import shutil
 import socket
 import threading
@@ -35,12 +35,15 @@ class YtDlpPlugin(Star):
             # 备用方案：如果库获取失败，尝试寻找系统命令
             self.ffmpeg_exe = "ffmpeg"
             self.logger.warning(f"imageio-ffmpeg 加载失败，回退到系统命令: {e}")
+            
         # 3. 基础配置
         self.proxy_enabled = self.config.get("proxy", {}).get("enabled", False)
         self.proxy_url = self.config.get("proxy", {}).get("url", "")
         self.max_quality = self.config.get("download", {}).get("max_quality", "720p")
         self.max_size_mb = self.config.get("download", {}).get("max_size_mb", 512)
-        # ========== 新增：启动内置 HTTP 服务器 ==========
+        self.delete_seconds = self.config.get("download", {}).get("auto_delete_seconds", 60)
+        
+        # 4. 启动内置 HTTP 服务器 (新增核心功能)
         self.server_port = 0 # 0 代表自动分配空闲端口
         self.server_ip = self._get_local_ip()
         self._start_http_server()
@@ -79,12 +82,12 @@ class YtDlpPlugin(Star):
         t = threading.Thread(target=run_server, daemon=True)
         t.start()
         # 等待一小会儿确保端口已分配
-        time.sleep(0.5)    
-    
+        time.sleep(0.5)
+
     @command("check_env")
     async def cmd_check_env(self, event: AstrMessageEvent):
         """诊断 FFmpeg 环境"""
-        yield event.plain_result(f"🔍 诊断中...\nFFmpeg路径: {self.ffmpeg_exe}")
+        yield event.plain_result(f"🔍 诊断中...\nFFmpeg路径: {self.ffmpeg_exe}\nServer: http://{self.server_ip}:{self.server_port}")
         
         # 判断是否可执行（文件存在 或 系统路径中可找到）
         is_ready = False
@@ -372,10 +375,6 @@ class YtDlpPlugin(Star):
                 yield event.chain_result([Video(file=file_url)])
             
             # ========== 结束 ==========
-                ext = os.path.splitext(abs_path)[1]
-                yield event.chain_result([File(file=abs_path, name=f"{safe_title}{ext}")])
-            else:
-                yield event.chain_result([Video.fromFileSystem(path=abs_path)])
 
             async def _cleanup():
                 await asyncio.sleep(self.delete_seconds + 30)
