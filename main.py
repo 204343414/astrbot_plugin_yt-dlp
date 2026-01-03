@@ -14,12 +14,12 @@ from http.server import SimpleHTTPRequestHandler, HTTPServer
 from astrbot.api.all import *
 from astrbot.api.message_components import Video, Plain, File
 
-@register("yt_dlp_plugin", "YourName", "全能视频下载助手", "3.2.0-MaxQuality")
+@register("yt_dlp_plugin", "YourName", "全能视频下载助手", "3.3.0-AegisubFix")
 class YtDlpPlugin(Star):
     def __init__(self, context: Context, config: dict, *args, **kwargs):
         super().__init__(context)
         self.logger = logging.getLogger("astrbot_plugin_yt_dlp")
-        self.logger.info("🔥 正在加载最高画质修复版 (v3.2)...") 
+        self.logger.info("🔥 正在加载 Aegisub 兼容版 (v3.3)...") 
         self.config = config
         
         self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
@@ -33,10 +33,13 @@ class YtDlpPlugin(Star):
             
         self.proxy_enabled = self.config.get("proxy", {}).get("enabled", False)
         self.proxy_url = self.config.get("proxy", {}).get("url", "")
-        # 默认画质改为最高，为了体验原版
-        self.max_quality = self.config.get("download", {}).get("max_quality", "最高画质")
+        
+        # === 关键配置 ===
+        self.max_quality = self.config.get("download", {}).get("max_quality", "720p")
         self.max_size_mb = self.config.get("download", {}).get("max_size_mb", 100)
         self.delete_seconds = self.config.get("download", {}).get("auto_delete_seconds", 60)
+        # 读取是否强制 H.264 (默认开启，为了兼容性)
+        self.prefer_h264 = self.config.get("download", {}).get("prefer_h264", True)
         
         self.server_port = 0 
         self.server_ip = self._get_local_ip()
@@ -80,24 +83,21 @@ class YtDlpPlugin(Star):
         else: return f"{size_bytes/1024**3:.2f} GB"
 
     async def _manual_merge(self, v, a, out):
-        # 使用 copy 模式无损合并，速度快且保持原画质
+        # 使用 copy 模式无损合并
         cmd = [self.ffmpeg_exe, "-i", v, "-i", a, "-c:v", "copy", "-c:a", "copy", "-y", out]
         def _run():
             startupinfo = None
             if os.name == 'nt':
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            # 捕获 stderr 以便调试
             return subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo)
         
         res = await asyncio.get_running_loop().run_in_executor(None, _run)
         if res.returncode != 0:
-            # 如果 copy 失败（编码不兼容），尝试转码合并 (会导致变慢但能成功)
-            self.logger.warning(f"无损合并失败，尝试重编码合并: {res.stderr[:200]}")
+            # 兼容性回退：如果 copy 失败，尝试重编码 (确保能出片)
             cmd_re = [self.ffmpeg_exe, "-i", v, "-i", a, "-q:v", "2", "-y", out]
             res = await asyncio.get_running_loop().run_in_executor(None, lambda: subprocess.run(cmd_re, capture_output=True))
-            if res.returncode != 0:
-                raise Exception("合并完全失败")
+            if res.returncode != 0: raise Exception("合并失败")
 
     async def _get_video_info_safe(self, url):
         opts = {"quiet":True, "no_warnings":True, "nocheckcertificate":True}
@@ -109,7 +109,6 @@ class YtDlpPlugin(Star):
         except: return None
 
     async def _download_stream(self, url, fmt, tmpl):
-        # 关键：ffmpeg_location 设为 None，禁止 yt-dlp 自动合并，我们自己来
         opts = {"outtmpl":tmpl, "format":fmt, "noplaylist":True, "quiet":True, "ffmpeg_location":None}
         if self.proxy_enabled: opts["proxy"] = self.proxy_url
         def _task():
@@ -125,22 +124,36 @@ class YtDlpPlugin(Star):
         if info: yield event.plain_result(f"📹 {info['title'][:20]}...\n📦 {self._format_size(info['filesize'])}\n⏳ 下载中...")
         
         ts = int(time.time())
-        # 分离视频和音频的临时文件
         v_tmpl = f"{self.temp_dir}/v_{ts}_%(id)s.%(ext)s"
         a_tmpl = f"{self.temp_dir}/a_{ts}_%(id)s.%(ext)s"
         
-        # ========== 画质选择逻辑 ==========
+        # ========== 核心：画质与编码选择 ==========
         limit = self.max_quality
-        # 优先选择 mp4 容器的视频流 (兼容性好)，如果没有则选最佳
-        if limit == "最高画质":
-            self.logger.info("模式: 最高画质")
-            fmt_v = "bestvideo[ext=mp4]/bestvideo"
-        else:
-            self.logger.info(f"模式: 限制 {limit}")
-            h = int(limit.replace("p", ""))
-            fmt_v = f"bestvideo[ext=mp4][height<={h}]/bestvideo[height<={h}]"
+        prefer_h264 = self.prefer_h264
         
-        fmt_a = "bestaudio[ext=m4a]/bestaudio" # 音频优先 m4a (AAC)
+        # 1. 确定编码过滤器
+        # vcodec^=avc1 代表 H.264
+        codec_filter = "[vcodec^=avc1]" if prefer_h264 else ""
+        
+        # 2. 确定高度过滤器
+        if limit == "最高画质":
+            height_filter = "" 
+        else:
+            h = int(limit.replace("p", ""))
+            height_filter = f"[height<={h}]"
+            
+        # 3. 组合 format 字符串
+        # 逻辑：优先下载满足 (H.264 + 限制高度) 的 mp4
+        # 如果没有(比如只要H.264但没那个分辨率)，则回退到 (H.264 + 任意高度)
+        # 再没有，才回退到 bestvideo (VP9/AV1)
+        if prefer_h264:
+            self.logger.info(f"模式: {limit} | 强制 H.264")
+            fmt_v = f"bestvideo[ext=mp4]{codec_filter}{height_filter}/bestvideo[ext=mp4]{codec_filter}/bestvideo{height_filter}"
+        else:
+            self.logger.info(f"模式: {limit} | 编码不限")
+            fmt_v = f"bestvideo[ext=mp4]{height_filter}/bestvideo{height_filter}"
+
+        fmt_a = "bestaudio[ext=m4a]/bestaudio"
 
         try:
             final_path = None
@@ -149,37 +162,29 @@ class YtDlpPlugin(Star):
             if ctype == "audio_only":
                 final_path, _ = await self._download_stream(url, fmt_a, a_tmpl)
             else:
-                # 1. 下载视频流
                 v_path, v_info = await self._download_stream(url, fmt_v, v_tmpl)
                 temp_files.append(v_path)
-                
-                # 2. 下载音频流
                 a_path, a_info = await self._download_stream(url, fmt_a, a_tmpl)
                 temp_files.append(a_path)
                 
-                # 3. 手动合并
                 yield event.plain_result("⚙️ 正在无损合并...")
-                # 输出文件强制 mp4
                 out_path = os.path.join(self.temp_dir, f"final_{ts}.mp4")
                 await self._manual_merge(v_path, a_path, out_path)
                 final_path = out_path
 
             if not final_path or not os.path.exists(final_path): raise Exception("文件生成失败")
             
-            # 检查大小
             fsize_mb = os.path.getsize(final_path) / (1024 * 1024)
             if fsize_mb > self.max_size_mb:
-                 yield event.plain_result(f"❌ 文件过大 ({fsize_mb:.1f}MB)，已停止发送。")
-                 # 可以在这里加个逻辑：如果过大，尝试压缩，但那样太慢了
+                 yield event.plain_result(f"❌ 文件过大 ({fsize_mb:.1f}MB)，已停止。")
             else:
                 fname = os.path.basename(final_path)
                 furl = f"http://{self.server_ip}:{self.server_port}/{fname}"
                 
                 if method == "file":
-                    # 智能 ID 获取逻辑
+                    # ID 获取逻辑
                     tid = None
                     is_group = False
-                    
                     if hasattr(event, 'message_obj'):
                         msg = event.message_obj
                         if getattr(msg, 'group_id', None):
@@ -187,8 +192,7 @@ class YtDlpPlugin(Star):
                             tid = msg.group_id
                         elif getattr(msg, 'user_id', None):
                             tid = msg.user_id
-                    
-                    if not tid: tid = event.session_id # 保底
+                    if not tid: tid = event.session_id
                     
                     if tid:
                         act = "upload_group_file" if is_group else "upload_private_file"
@@ -200,7 +204,6 @@ class YtDlpPlugin(Star):
                 else:
                     yield event.chain_result([Video(file=furl, url=furl)])
             
-            # 清理垃圾
             async def _clean():
                 await asyncio.sleep(self.delete_seconds+20)
                 if os.path.exists(final_path): os.remove(final_path)
