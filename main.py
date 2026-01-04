@@ -14,12 +14,12 @@ from http.server import SimpleHTTPRequestHandler, HTTPServer
 from astrbot.api.all import *
 from astrbot.api.message_components import Video, Plain, File
 
-@register("yt_dlp_plugin", "YourName", "全能视频下载助手", "3.3.0-AegisubFix")
+@register("yt_dlp_plugin", "YourName", "全能视频下载助手", "3.4.0-NameFix")
 class YtDlpPlugin(Star):
     def __init__(self, context: Context, config: dict, *args, **kwargs):
         super().__init__(context)
         self.logger = logging.getLogger("astrbot_plugin_yt_dlp")
-        self.logger.info("🔥 正在加载 Aegisub 兼容版 (v3.3)...") 
+        self.logger.info("🔥 正在加载文件名修复版 (v3.4)...") 
         self.config = config
         
         self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
@@ -33,12 +33,9 @@ class YtDlpPlugin(Star):
             
         self.proxy_enabled = self.config.get("proxy", {}).get("enabled", False)
         self.proxy_url = self.config.get("proxy", {}).get("url", "")
-        
-        # === 关键配置 ===
         self.max_quality = self.config.get("download", {}).get("max_quality", "720p")
         self.max_size_mb = self.config.get("download", {}).get("max_size_mb", 100)
         self.delete_seconds = self.config.get("download", {}).get("auto_delete_seconds", 60)
-        # 读取是否强制 H.264 (默认开启，为了兼容性)
         self.prefer_h264 = self.config.get("download", {}).get("prefer_h264", True)
         
         self.server_port = 0 
@@ -72,8 +69,10 @@ class YtDlpPlugin(Star):
 
     def _sanitize_filename(self, name: str) -> str:
         if not name: return "video"
+        # 替换非法字符为下划线
         name = re.sub(r'[\\/*?:"<>|]', '_', name)
-        return name.replace('\n', ' ').replace('\r', '')[:50].strip()
+        # 移除换行符，去除首尾空格，限制长度为 100 字符
+        return name.replace('\n', ' ').replace('\r', '')[:100].strip()
 
     def _format_size(self, size_bytes):
         if size_bytes is None: return "未知"
@@ -83,7 +82,6 @@ class YtDlpPlugin(Star):
         else: return f"{size_bytes/1024**3:.2f} GB"
 
     async def _manual_merge(self, v, a, out):
-        # 使用 copy 模式无损合并
         cmd = [self.ffmpeg_exe, "-i", v, "-i", a, "-c:v", "copy", "-c:a", "copy", "-y", out]
         def _run():
             startupinfo = None
@@ -94,7 +92,6 @@ class YtDlpPlugin(Star):
         
         res = await asyncio.get_running_loop().run_in_executor(None, _run)
         if res.returncode != 0:
-            # 兼容性回退：如果 copy 失败，尝试重编码 (确保能出片)
             cmd_re = [self.ffmpeg_exe, "-i", v, "-i", a, "-q:v", "2", "-y", out]
             res = await asyncio.get_running_loop().run_in_executor(None, lambda: subprocess.run(cmd_re, capture_output=True))
             if res.returncode != 0: raise Exception("合并失败")
@@ -127,25 +124,13 @@ class YtDlpPlugin(Star):
         v_tmpl = f"{self.temp_dir}/v_{ts}_%(id)s.%(ext)s"
         a_tmpl = f"{self.temp_dir}/a_{ts}_%(id)s.%(ext)s"
         
-        # ========== 核心：画质与编码选择 ==========
         limit = self.max_quality
         prefer_h264 = self.prefer_h264
         
-        # 1. 确定编码过滤器
-        # vcodec^=avc1 代表 H.264
         codec_filter = "[vcodec^=avc1]" if prefer_h264 else ""
-        
-        # 2. 确定高度过滤器
-        if limit == "最高画质":
-            height_filter = "" 
-        else:
-            h = int(limit.replace("p", ""))
-            height_filter = f"[height<={h}]"
+        if limit == "最高画质": height_filter = "" 
+        else: height_filter = f"[height<={int(limit.replace('p', ''))}]"
             
-        # 3. 组合 format 字符串
-        # 逻辑：优先下载满足 (H.264 + 限制高度) 的 mp4
-        # 如果没有(比如只要H.264但没那个分辨率)，则回退到 (H.264 + 任意高度)
-        # 再没有，才回退到 bestvideo (VP9/AV1)
         if prefer_h264:
             self.logger.info(f"模式: {limit} | 强制 H.264")
             fmt_v = f"bestvideo[ext=mp4]{codec_filter}{height_filter}/bestvideo[ext=mp4]{codec_filter}/bestvideo{height_filter}"
@@ -158,12 +143,16 @@ class YtDlpPlugin(Star):
         try:
             final_path = None
             temp_files = []
+            video_title_real = "video" # 用于存储真实标题
 
             if ctype == "audio_only":
-                final_path, _ = await self._download_stream(url, fmt_a, a_tmpl)
+                final_path, a_info = await self._download_stream(url, fmt_a, a_tmpl)
+                video_title_real = a_info.get('title', 'audio')
             else:
                 v_path, v_info = await self._download_stream(url, fmt_v, v_tmpl)
+                video_title_real = v_info.get('title', 'video') # 捕获标题
                 temp_files.append(v_path)
+                
                 a_path, a_info = await self._download_stream(url, fmt_a, a_tmpl)
                 temp_files.append(a_path)
                 
@@ -176,13 +165,18 @@ class YtDlpPlugin(Star):
             
             fsize_mb = os.path.getsize(final_path) / (1024 * 1024)
             if fsize_mb > self.max_size_mb:
-                 yield event.plain_result(f"❌ 文件过大 ({fsize_mb:.1f}MB)，已停止。")
+                 yield event.plain_result(f"❌ 文件过大 ({fsize_mb:.1f}MB)")
             else:
-                fname = os.path.basename(final_path)
-                furl = f"http://{self.server_ip}:{self.server_port}/{fname}"
+                # 物理文件名（用于下载）
+                fname_disk = os.path.basename(final_path)
+                furl = f"http://{self.server_ip}:{self.server_port}/{fname_disk}"
+                
+                # 展示文件名（用于上传显示，取视频标题）
+                safe_title = self._sanitize_filename(video_title_real)
+                ext = os.path.splitext(final_path)[1]
+                display_name = f"{safe_title}{ext}"
                 
                 if method == "file":
-                    # ID 获取逻辑
                     tid = None
                     is_group = False
                     if hasattr(event, 'message_obj'):
@@ -197,8 +191,9 @@ class YtDlpPlugin(Star):
                     if tid:
                         act = "upload_group_file" if is_group else "upload_private_file"
                         key = "group_id" if is_group else "user_id"
-                        self.logger.info(f"API调用: {act} -> {tid}")
-                        await event.bot.call_action(act, **{key: int(tid), "file": furl, "name": fname})
+                        self.logger.info(f"API: {act} -> {tid} | Name: {display_name}")
+                        # 关键修改：name 参数使用 display_name (视频标题)
+                        await event.bot.call_action(act, **{key: int(tid), "file": furl, "name": display_name})
                     else:
                         yield event.plain_result("❌ 无法获取目标ID")
                 else:
