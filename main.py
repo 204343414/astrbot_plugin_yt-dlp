@@ -219,4 +219,3 @@ class YtDlpPlugin(Star):
     @command("video")
     async def cmd_download_video(self, event: AstrMessageEvent, url: str = ""):
         async for res in self._core_download_handler(event, url, "video", "merged"): yield res
-EOF
