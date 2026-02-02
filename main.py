@@ -185,6 +185,7 @@ class YtDlpPlugin(Star):
             return
 
         ts = int(time.time())
+        final_password = None # 用于最后提示密码
 
         # ==================== 播放列表逻辑 ====================
         if info.get('is_playlist'):
@@ -196,38 +197,32 @@ class YtDlpPlugin(Star):
                 yield event.plain_result(
                     f"📂 检测到播放列表:【{title}】\n"
                     f"🔢 包含视频数: {count} 个\n\n"
-                    f"⚠️ 为防止服务器过载，请确认是否下载并打包？\n"
+                    f"⚠️ 为防止炸服，请确认是否下载并打包（加密）？\n"
                     f"✅ 确认下载请回复:\n/download {url} --y"
                 )
                 return
 
-            if count > 20: # 安全阈值，防止炸服
-                yield event.plain_result(f"❌ 视频数量 ({count}) 超过单次限制 (20)，请分批下载。")
+            if count > 30: # 阈值可自己改
+                yield event.plain_result(f"❌ 视频数量 ({count}) 超过单次限制 (30)。")
                 return
 
-            yield event.plain_result(f"📦 开始处理播放列表 ({count}个)... 可能会花费较长时间，请耐心等待。")
+            yield event.plain_result(f"📦 开始下载播放列表 ({count}个)... 请耐心等待。")
             
-            # 创建临时文件夹用于存放本组视频
             playlist_folder = os.path.join(self.temp_dir, f"pl_{ts}")
             if not os.path.exists(playlist_folder):
                 os.makedirs(playlist_folder)
 
-            downloaded_files = []
-            
-            # 循环下载列表中的每个视频
-            # 注意：这里我们简化逻辑，直接调用 yt-dlp 下载整个列表到指定文件夹
+            # 下载列表
             playlist_tmpl = f"{playlist_folder}/%(playlist_index)s_%(title)s.%(ext)s"
-            
-            limit = self.max_quality
-            # 列表下载通常不建议用最高画质，容易太大，这里锁定为 1080p 或 720p 以保证成功率，或者跟随设置
+            # 列表建议限制画质以减小体积
             fmt_v = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
             
             opts = {
                 "outtmpl": playlist_tmpl,
                 "format": fmt_v,
                 "quiet": True,
-                "ignoreerrors": True, # 忽略单个下载失败
-                "noplaylist": False,  # 允许列表
+                "ignoreerrors": True,
+                "noplaylist": False,
             }
             if self.proxy_enabled: opts["proxy"] = self.proxy_url
 
@@ -235,42 +230,55 @@ class YtDlpPlugin(Star):
                 await asyncio.get_running_loop().run_in_executor(
                     None, lambda: yt_dlp.YoutubeDL(opts).download([url]))
             except Exception as e:
-                yield event.plain_result(f"⚠️ 下载过程中出现部分错误: {e}")
+                yield event.plain_result(f"⚠️ 下载部分出错: {e}")
 
-            # 统计下载好的文件
             files = glob.glob(os.path.join(playlist_folder, "*"))
             if not files:
-                yield event.plain_result("❌ 播放列表下载失败，未能获取任何文件。")
+                yield event.plain_result("❌ 列表下载失败，无文件。")
                 shutil.rmtree(playlist_folder)
                 return
 
-            # 打包 ZIP
-            yield event.plain_result(f"🗜️ 正在将 {len(files)} 个视频打包为 ZIP...")
-            zip_path = os.path.join(self.temp_dir, f"Playlist_{ts}.zip")
+            # ========== 加密打包逻辑 ==========
+            yield event.plain_result(f"🔐 正在加密打包 {len(files)} 个文件 (密码: 123456)...")
             
-            def _do_zip():
-                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            # 尝试导入 pyzipper，如果没有则自动安装
+            try:
+                import pyzipper
+            except ImportError:
+                self.logger.info("未找到 pyzipper，正在自动安装...")
+                yield event.plain_result("⚙️ 首次运行正在安装加密依赖库...")
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: subprocess.run([sys.executable, "-m", "pip", "install", "pyzipper"], capture_output=True)
+                )
+                import pyzipper # 安装后再次导入
+
+            # 文件名加上 pwd 提示
+            zip_name = f"Playlist_{self._sanitize_filename(title)}_Pwd123456.zip"
+            zip_path = os.path.join(self.temp_dir, zip_name)
+            
+            def _do_encrypted_zip():
+                # 使用 AES 加密
+                with pyzipper.AESZipFile(zip_path, 'w', compression=pyzipper.ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as zf:
+                    zf.setpassword(b"123456") # 设置二进制密码
                     for f in files:
                         zf.write(f, os.path.basename(f))
             
-            await asyncio.get_running_loop().run_in_executor(None, _do_zip)
+            await asyncio.get_running_loop().run_in_executor(None, _do_encrypted_zip)
             
-            # 清理视频散文件，只留 ZIP
-            shutil.rmtree(playlist_folder)
-            
+            shutil.rmtree(playlist_folder) # 清理源文件
             final_path = zip_path
             video_title_real = f"Playlist_{title}"
-            # 标记为文件上传
-            method = "file" 
+            method = "file" # 强制转为文件发送
+            final_password = "123456"
 
-        # ==================== 单视频逻辑 (原有逻辑优化) ====================
+        # ==================== 单视频逻辑 ====================
         else:
             yield event.plain_result(f"📹 {info['title'][:30]}...\n⏳ 开始下载...")
             
             v_tmpl = f"{self.temp_dir}/v_{ts}_%(id)s.%(ext)s"
             a_tmpl = f"{self.temp_dir}/a_{ts}_%(id)s.%(ext)s"
             
-            # ... (保留原有的画质选择逻辑，此处为节省篇幅简略，请确保你的代码里有 fmt_v 定义) ...
+            # 画质逻辑
             limit = self.max_quality
             prefer_h264 = self.prefer_h264
             if limit == "最高画质":
@@ -279,7 +287,6 @@ class YtDlpPlugin(Star):
                 height = int(limit.replace('p', ''))
                 fmt_v = f"bestvideo[height<={height}][vcodec^=avc1]" if prefer_h264 else f"bestvideo[height<={height}]"
             fmt_a = "bestaudio[ext=m4a]/bestaudio"
-            # ...
 
             try:
                 if ctype == "audio_only":
@@ -291,18 +298,18 @@ class YtDlpPlugin(Star):
                     video_title_real = v_info.get('title', 'video')
                     a_path, a_info = await self._download_stream(url, fmt_a, a_tmpl)
                     
-                    yield event.plain_result(f"⚙️ 合并音视频...")
+                    yield event.plain_result(f"⚙️ 合并中...")
                     out_path = os.path.join(self.temp_dir, f"final_{ts}.mp4")
                     await self._manual_merge(v_path, a_path, out_path)
                     final_path = out_path
                     temp_files = [v_path, a_path]
             except Exception as e:
-                # 之前添加的自动更新检测代码放在这里
+                # 自动检测 yt-dlp 更新逻辑
                 err_str = str(e).lower()
                 yield event.plain_result(f"❌ 错误: {e}")
                 updated, log = await self._try_update_ytdlp()
                 if updated:
-                    yield event.plain_result(f"✅ 组件已自动更新，请重启机器人后重试。")
+                    yield event.plain_result(f"✅ 核心组件已自动更新，请重启机器人后重试。")
                 return
 
         # ==================== 统一上传逻辑 ====================
@@ -312,22 +319,34 @@ class YtDlpPlugin(Star):
 
         fsize_mb = os.path.getsize(final_path) / (1024 * 1024)
         
-        # 增加 ZIP 大小警告
-        max_upload_size = 500 if info.get('is_playlist') else self.max_size_mb
+        # 播放列表通常允许更大一点的体积 (500MB)，单视频跟随配置
+        max_limit = 500 if info.get('is_playlist') else self.max_size_mb
         
-        if fsize_mb > max_upload_size:
+        # 构造密码提示文本
+        pwd_hint = f"\n🔐 **解压密码: {final_password}**" if final_password else ""
+
+        if fsize_mb > max_limit:
             fname_disk = os.path.basename(final_path)
             furl = f"http://{self.server_ip}:{self.server_port}/{fname_disk}"
-            yield event.plain_result(f"⚠️ 文件过大 ({fsize_mb:.1f}MB)，无法直接通过聊天窗口发送。\n🔗 直链下载: {furl}\n⏳ 文件将在 {self.delete_seconds}秒后删除。")
+            yield event.plain_result(
+                f"⚠️ 文件过大 ({fsize_mb:.1f}MB)，无法直接发送。\n"
+                f"🔗 直链下载: {furl}\n"
+                f"{pwd_hint}\n"
+                f"⏳ 有效期 {self.delete_seconds} 秒"
+            )
         else:
             fname_disk = os.path.basename(final_path)
             furl = f"http://{self.server_ip}:{self.server_port}/{fname_disk}"
             safe_title = self._sanitize_filename(video_title_real)
             ext = os.path.splitext(final_path)[1]
             display_name = f"{safe_title}{ext}"
+            
+            # 如果是加密包，强制在文件名里也写上密码，防止用户忘
+            if final_password and "Pwd" not in display_name:
+                display_name = f"Pwd{final_password}_{display_name}"
 
             if method == "file":
-                yield event.plain_result(f"⬆️ 正在上传 ({fsize_mb:.1f}MB)...")
+                yield event.plain_result(f"⬆️ 正在上传 ({fsize_mb:.1f}MB)...{pwd_hint}")
                 tid = None
                 is_group = False
                 if hasattr(event, 'message_obj'):
@@ -345,15 +364,16 @@ class YtDlpPlugin(Star):
                     try:
                         await event.bot.call_action(act, **{key: int(tid), "file": furl, "name": display_name})
                     except Exception as upload_err:
-                        yield event.plain_result(f"❌ 上传失败 (可能是文件太大): {upload_err}\n🔗 请尝试直链: {furl}")
+                        yield event.plain_result(f"❌ 上传超时或失败: {upload_err}\n🔗 请使用直链: {furl}{pwd_hint}")
                 else:
-                    yield event.plain_result(f"🔗 直链: {furl}")
+                    yield event.plain_result(f"🔗 直链: {furl}{pwd_hint}")
             else:
                 yield event.chain_result([Video(file=furl, url=furl)])
 
         # 清理任务
         async def _clean():
-            await asyncio.sleep(self.delete_seconds + 60) # 列表通常大，多留点时间
+            wait_time = 120 if info.get('is_playlist') else self.delete_seconds + 30
+            await asyncio.sleep(wait_time)
             if os.path.exists(final_path):
                 os.remove(final_path)
             if 'temp_files' in locals():
