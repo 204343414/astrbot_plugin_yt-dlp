@@ -173,8 +173,8 @@ class YtDlpPlugin(Star):
         
         # 1. 检查是否包含确认参数
         confirmed = False
-        if " --y" in url:
-            url = url.replace(" --y", "").strip()
+        if "--y" in url:
+            url = url.replace("--y", "").replace("  ", " ").strip()
             confirmed = True
             
         yield event.plain_result(f"⏳ 正在解析资源信息...")
