@@ -383,21 +383,28 @@ class YtDlpPlugin(Star):
 
     @command("download")
     async def cmd_download_file(self, event: AstrMessageEvent, url: str = ""):
-        # 从原始消息中提取完整参数(包含 --y)
         raw = event.message_str
-        if "/download " in raw:
-            full_url = raw.split("/download ", 1)[1].strip()
-        else:
-            full_url = url
+        # 兼容多种格式: /download, download, 或直接url
+        full_url = url
+        for prefix in ["/download ", "download "]:
+            if prefix in raw:
+                full_url = raw.split(prefix, 1)[1].strip()
+                break
+        # 如果url参数里没有--y，但原始消息有，补上
+        if "--y" not in full_url and "--y" in raw:
+            full_url = full_url + " --y"
         async for res in self._core_download_handler(event, full_url, "file", "merged"):
             yield res
 
     @command("video")
     async def cmd_download_video(self, event: AstrMessageEvent, url: str = ""):
         raw = event.message_str
-        if "/video " in raw:
-            full_url = raw.split("/video ", 1)[1].strip()
-        else:
-            full_url = url
+        full_url = url
+        for prefix in ["/video ", "video "]:
+            if prefix in raw:
+                full_url = raw.split(prefix, 1)[1].strip()
+                break
+        if "--y" not in full_url and "--y" in raw:
+            full_url = full_url + " --y"
         async for res in self._core_download_handler(event, full_url, "video", "merged"):
             yield res
