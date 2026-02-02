@@ -6,6 +6,7 @@ import yt_dlp
 import glob
 import re
 import subprocess
+import sys  # <--- 新增这行，用于调用当前环境的pip
 import imageio_ffmpeg
 import shutil
 import socket
@@ -89,7 +90,23 @@ class YtDlpPlugin(Star):
             return f"{size_bytes/1024**2:.2f} MB"
         else:
             return f"{size_bytes/1024**3:.2f} GB"
-
+    async def _try_update_ytdlp(self):
+        self.logger.info("正在尝试自动更新 yt-dlp...")
+        def _run_update():
+            try:
+                # 使用当前python解释器调用pip更新
+                cmd = [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"]
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                # 检查输出中是否有更新成功的关键词
+                if "Successfully installed" in res.stdout:
+                    return True, res.stdout
+                elif "Requirement already satisfied" in res.stdout:
+                    return False, "Already latest"
+                return False, res.stderr
+            except Exception as e:
+                return False, str(e)
+        
+        return await asyncio.get_running_loop().run_in_executor(None, _run_update)
     async def _manual_merge(self, v, a, out):
         cmd = [self.ffmpeg_exe, "-i", v, "-i", a, "-c:v", "copy", "-c:a", "copy", "-y", out]
         def _run():
@@ -243,7 +260,22 @@ class YtDlpPlugin(Star):
 
         except Exception as e:
             self.logger.error(f"下载错误: {e}")
-            yield event.plain_result(f"❌ 错误: {e}")
+            yield event.plain_result(f"❌ 下载遇到错误: {e}")
+            
+            # 检测是否是常见的 yt-dlp 需要更新的报错关键字
+            # 这里的关键字可以根据实际情况增加，比如 "ExtractorError" 等
+            err_str = str(e).lower()
+            yield event.plain_result(f"⚠️ 正在检测 yt-dlp 组件版本...")
+            
+            updated, log = await self._try_update_ytdlp()
+            
+            if updated:
+                yield event.plain_result(f"✅ 检测到核心组件 yt-dlp 有新版本并已自动更新！\n\n📢 **请务必重启 AstrBot 后再次尝试下载。**")
+                self.logger.info(f"yt-dlp 更新成功: {log[:100]}...")
+            elif log == "Already latest":
+                yield event.plain_result(f"ℹ️ 组件已是最新版，下载失败可能源于网络问题或该资源受限。")
+            else:
+                yield event.plain_result(f"❌ 尝试自动更新失败，请检查后台日志。")
 
     @command("download")
     async def cmd_download_file(self, event: AstrMessageEvent, url: str = ""):
