@@ -382,11 +382,14 @@ class YtDlpPlugin(Star):
         asyncio.create_task(_clean())
 
     @command("download")
-    async def cmd_download_file(self, event: AstrMessageEvent, url: str = ""):
-        async for res in self._core_download_handler(event, url, "file", "merged"):
+    async def cmd_download_file(self, event: AstrMessageEvent, url: str = "", *args):
+        # 修复无限循环bug：把被截断的 --y 拼回去
+        full_url = f"{url} {' '.join(args)}".strip()
+        async for res in self._core_download_handler(event, full_url, "file", "merged"):
             yield res
 
     @command("video")
-    async def cmd_download_video(self, event: AstrMessageEvent, url: str = ""):
-        async for res in self._core_download_handler(event, url, "video", "merged"):
+    async def cmd_download_video(self, event: AstrMessageEvent, url: str = "", *args):
+        full_url = f"{url} {' '.join(args)}".strip()
+        async for res in self._core_download_handler(event, full_url, "video", "merged"):
             yield res
