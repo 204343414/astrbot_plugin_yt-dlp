@@ -360,34 +360,6 @@ class YtDlpPlugin(Star):
                 for f in temp_files:
                     if os.path.exists(f): os.remove(f)
         asyncio.create_task(_clean())
-            
-            async def _clean():
-                await asyncio.sleep(self.delete_seconds + 20)
-                if os.path.exists(final_path):
-                    os.remove(final_path)
-                for f in temp_files:
-                    if os.path.exists(f):
-                        os.remove(f)
-            asyncio.create_task(_clean())
-
-        except Exception as e:
-            self.logger.error(f"下载错误: {e}")
-            yield event.plain_result(f"❌ 下载遇到错误: {e}")
-            
-            # 检测是否是常见的 yt-dlp 需要更新的报错关键字
-            # 这里的关键字可以根据实际情况增加，比如 "ExtractorError" 等
-            err_str = str(e).lower()
-            yield event.plain_result(f"⚠️ 正在检测 yt-dlp 组件版本...")
-            
-            updated, log = await self._try_update_ytdlp()
-            
-            if updated:
-                yield event.plain_result(f"✅ 检测到核心组件 yt-dlp 有新版本并已自动更新！\n\n📢 **请务必重启 AstrBot 后再次尝试下载。**")
-                self.logger.info(f"yt-dlp 更新成功: {log[:100]}...")
-            elif log == "Already latest":
-                yield event.plain_result(f"ℹ️ 组件已是最新版，下载失败可能源于网络问题或该资源受限。")
-            else:
-                yield event.plain_result(f"❌ 尝试自动更新失败，请检查后台日志。")
 
     @command("download")
     async def cmd_download_file(self, event: AstrMessageEvent, url: str = ""):
