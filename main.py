@@ -408,3 +408,122 @@ class YtDlpPlugin(Star):
             full_url = full_url + " --y"
         async for res in self._core_download_handler(event, full_url, "video", "merged"):
             yield res
+    @command("直链")
+    async def cmd_get_direct_url(self, event: AstrMessageEvent, url: str = ""):
+        """提取视频直链，不下载"""
+        raw = event.message_str
+        full_url = url
+        for prefix in ["/直链 ", "直链 "]:
+            if prefix in raw:
+                full_url = raw.split(prefix, 1)[1].strip()
+                break
+        if not full_url:
+            yield event.plain_result("❌ 请提供视频链接，例如: /直链 https://www.youtube.com/watch?v=xxx")
+            return
+
+        yield event.plain_result("⏳ 正在解析直链，请稍候...")
+
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "nocheckcertificate": True,
+            "noplaylist": True,
+            "skip_download": True,
+        }
+        if self.proxy_enabled:
+            opts["proxy"] = self.proxy_url
+
+        try:
+            def _extract():
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    return ydl.extract_info(full_url, download=False)
+
+            info = await asyncio.get_running_loop().run_in_executor(None, _extract)
+        except Exception as e:
+            yield event.plain_result(f"❌ 解析失败: {e}")
+            return
+
+        if not info:
+            yield event.plain_result("❌ 无法获取视频信息。")
+            return
+
+        title = info.get("title", "未知标题")
+        duration = info.get("duration")
+        dur_str = f"{int(duration)//60}:{int(duration)%60:02d}" if duration else "未知"
+
+        # 如果有直接可用的 url（合并格式）
+        direct_url = info.get("url")
+
+        # 收集所有 format 中的直链
+        formats = info.get("formats", [])
+
+        # 找最佳合并流（同时含视频和音频的格式）
+        best_combined = None
+        for f in formats:
+            vcodec = f.get("vcodec", "none")
+            acodec = f.get("acodec", "none")
+            if vcodec != "none" and acodec != "none":
+                best_combined = f
+
+        # 找最佳纯视频流
+        best_video = None
+        for f in formats:
+            vcodec = f.get("vcodec", "none")
+            acodec = f.get("acodec", "none")
+            if vcodec != "none" and acodec == "none":
+                best_video = f
+
+        # 找最佳纯音频流
+        best_audio = None
+        for f in formats:
+            vcodec = f.get("vcodec", "none")
+            acodec = f.get("acodec", "none")
+            if vcodec == "none" and acodec != "none":
+                best_audio = f
+
+        lines = []
+        lines.append(f"🎬 标题: {title}")
+        lines.append(f"⏱ 时长: {dur_str}")
+        lines.append("")
+
+        if best_combined and best_combined.get("url"):
+            res_h = best_combined.get("height", "?")
+            res_w = best_combined.get("width", "?")
+            ext = best_combined.get("ext", "?")
+            fsize = self._format_size(best_combined.get("filesize") or best_combined.get("filesize_approx"))
+            lines.append(f"✅ 最佳合并流 ({res_w}x{res_h}, {ext}, {fsize}):")
+            lines.append(best_combined["url"])
+        elif direct_url:
+            lines.append(f"✅ 直链:")
+            lines.append(direct_url)
+        else:
+            lines.append("⚠️ 无合并流直链")
+
+        lines.append("")
+
+        if best_video and best_video.get("url"):
+            res_h = best_video.get("height", "?")
+            res_w = best_video.get("width", "?")
+            ext = best_video.get("ext", "?")
+            vcodec = best_video.get("vcodec", "?")
+            fsize = self._format_size(best_video.get("filesize") or best_video.get("filesize_approx"))
+            lines.append(f"🎥 最佳视频流 ({res_w}x{res_h}, {vcodec}, {ext}, {fsize}):")
+            lines.append(best_video["url"])
+        else:
+            lines.append("⚠️ 无单独视频流直链")
+
+        lines.append("")
+
+        if best_audio and best_audio.get("url"):
+            acodec = best_audio.get("acodec", "?")
+            ext = best_audio.get("ext", "?")
+            fsize = self._format_size(best_audio.get("filesize") or best_audio.get("filesize_approx"))
+            lines.append(f"🎵 最佳音频流 ({acodec}, {ext}, {fsize}):")
+            lines.append(best_audio["url"])
+        else:
+            lines.append("⚠️ 无单独音频流直链")
+
+        lines.append("")
+        lines.append("⚠️ 直链有时效性，请尽快使用。")
+
+        yield event.plain_result("\n".join(lines))
