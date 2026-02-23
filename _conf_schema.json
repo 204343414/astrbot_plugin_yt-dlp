@@ -22,11 +22,11 @@
     "type": "object",
     "items": {
       "max_quality": {
-    "description": "最高画质",
-    "type": "string",
-    "default": "720p",
-    "options": ["480p", "720p", "1080p", "最高画质"],
-    "hint": "选择「最高画质」将下载源视频的最高分辨率（可能很大），其他选项限制最高分辨率"
+        "description": "最高画质",
+        "type": "string",
+        "default": "720p",
+        "options": ["480p", "720p", "1080p"],
+        "hint": "限制视频最高画质，画质越高文件越大，可能发送失败"
       },
       "max_size_mb": {
         "description": "最大文件大小 (MB)",
@@ -45,6 +45,30 @@
         "type": "bool",
         "default": true,
         "hint": "H.264 兼容性最好，关闭后可能下载 VP9/AV1 编码（部分设备无法播放）"
+      }
+    }
+  },
+  "ffmpeg": {
+    "description": "FFmpeg 设置",
+    "type": "object",
+    "items": {
+      "use_builtin": {
+        "description": "使用内置 FFmpeg",
+        "type": "bool",
+        "default": true,
+        "hint": "如果插件自带了 ffmpeg.exe，优先使用内置版本"
+      },
+      "custom_path": {
+        "description": "自定义 FFmpeg 路径",
+        "type": "string",
+        "default": "",
+        "hint": "留空则自动寻找，填写示例: C:/ffmpeg/bin/ffmpeg.exe 或 /usr/bin/ffmpeg"
+      },
+      "use_system_path": {
+        "description": "搜索系统 PATH",
+        "type": "bool",
+        "default": true,
+        "hint": "当内置和自定义路径都找不到时，是否在系统 PATH 中搜索 ffmpeg"
       }
     }
   }
