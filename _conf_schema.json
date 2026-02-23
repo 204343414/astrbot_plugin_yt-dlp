@@ -1,25 +1,50 @@
 {
-  "monitor": {
-    "description": "监控设置",
+  "proxy": {
+    "description": "HTTP 代理设置",
     "type": "object",
     "items": {
-      "http_port": {
-        "description": "HTTP 接收端口",
-        "type": "int",
-        "default": 9876,
-        "hint": "接收 GMod 服务器发来数据的端口，需要在防火墙放行"
+      "enabled": {
+        "description": "启用代理",
+        "type": "bool",
+        "default": false,
+        "hint": "如果需要下载 YouTube、Twitter 等海外视频，请开启并配置代理"
       },
-      "notify_group_id": {
-        "description": "通知群号",
+      "url": {
+        "description": "代理地址",
         "type": "string",
-        "default": "",
-        "hint": "服务器崩溃/封禁时自动发送通知到这个QQ群，留空则不主动通知"
+        "default": "http://127.0.0.1:7890",
+        "hint": "格式: http://IP:端口，常见端口有 7890 (Clash)、10809 (V2Ray)、1080 (Shadowsocks)"
+      }
+    }
+  },
+  "download": {
+    "description": "下载设置",
+    "type": "object",
+    "items": {
+      "max_quality": {
+    "description": "最高画质",
+    "type": "string",
+    "default": "720p",
+    "options": ["480p", "720p", "1080p", "最高画质"],
+    "hint": "选择「最高画质」将下载源视频的最高分辨率（可能很大），其他选项限制最高分辨率"
       },
-      "auto_analyze": {
-        "description": "崩溃后自动分析E2代码",
+      "max_size_mb": {
+        "description": "最大文件大小 (MB)",
+        "type": "int",
+        "default": 50,
+        "hint": "超过此大小的视频将不会下载，QQ 一般限制 100MB"
+      },
+      "auto_delete_seconds": {
+        "description": "临时文件清理时间 (秒)",
+        "type": "int",
+        "default": 60,
+        "hint": "下载的视频文件多久后自动删除，设置太短可能导致发送失败"
+      },
+      "prefer_h264": {
+        "description": "优先 H.264 编码",
         "type": "bool",
         "default": true,
-        "hint": "检测到崩溃时是否自动调用LLM分析最后上传的E2代码"
+        "hint": "H.264 兼容性最好，关闭后可能下载 VP9/AV1 编码（部分设备无法播放）"
       }
     }
   }
