@@ -1,4 +1,4 @@
-name: astrbot_plugin_yt-dlp # 插件唯一识别名，以 astrbot_plugin_ 前缀开头
+name: astrbot_plugin_yt_dlp # 插件唯一识别名，以 astrbot_plugin_ 前缀开头
 # 插件名称（给人看的）
 display_name: 全能视频直链提取器
 # 描述
