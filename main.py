@@ -16,7 +16,7 @@ from http.server import SimpleHTTPRequestHandler, HTTPServer
 from astrbot.api.all import *
 from astrbot.api.message_components import Video, Plain, File
 
-@register("yt_dlp_plugin", "YourName", "全能视频下载助手", "3.5.2-DebugChat")
+@register("yt_dlp_plugin", "YourName", "全能视频下载助手", "3.5.3-PEP668")
 class YtDlpPlugin(Star):
     def __init__(self, context: Context, config: dict, *args, **kwargs):
         super().__init__(context)
@@ -25,10 +25,10 @@ class YtDlpPlugin(Star):
 
         # --- 调试模式 ---
         self.debug_mode = self.config.get("advanced", {}).get("debug", False)
-        self._debug_buffer = []  # 收集调试消息, 用于发送到聊天窗口
+        self._debug_buffer = []
         # -----------------
 
-        self.logger.info("🔥 加载 DebugChat 版 (v3.5.2)...")
+        self.logger.info("🔥 加载 PEP668 修复版 (v3.5.3)...")
         self._dbg("初始化", f"debug_mode={self.debug_mode}, config keys: {list(self.config.keys())}")
 
         self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
@@ -68,14 +68,12 @@ class YtDlpPlugin(Star):
 
     # ==================== 调试系统 ====================
     def _dbg(self, step: str, msg: str):
-        """记录调试日志 (控制台 + 缓冲区)"""
         if self.debug_mode:
             line = f"[{step}] {msg}"
             self.logger.info(f"[DEBUG]{line}")
             self._debug_buffer.append(line)
 
     def _dbg_chat(self, event, msg: str):
-        """仅在 debug_mode=True 时返回一条可 yield 的聊天消息; 否则返回 None"""
         if self.debug_mode:
             return event.plain_result(f"🔍 {msg}")
         return None
@@ -124,22 +122,57 @@ class YtDlpPlugin(Star):
         else:
             return f"{size_bytes/1024**3:.2f} GB"
 
+    # ==================== PEP 668 兼容的更新逻辑 ====================
     async def _try_update_ytdlp(self):
+        """
+        自动更新 yt-dlp, 兼容 Debian PEP 668 (externally-managed)。
+        策略: 普通 pip → --break-system-packages → pipx
+        """
         self.logger.info("正在尝试自动更新 yt-dlp...")
         self._dbg("更新yt-dlp", f"解释器: {sys.executable}")
+
+        def _run_one_cmd(cmd):
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            tail = (res.stdout or "")[-300:]
+            self._dbg("更新yt-dlp", f"cmd: {' '.join(cmd)}")
+            self._dbg("更新yt-dlp", f"stdout tail: {tail}")
+            if res.stderr:
+                self._dbg("更新yt-dlp", f"stderr: {res.stderr[:300]}")
+            return res
+
+        def _is_success(res):
+            if "Successfully installed" in (res.stdout or ""):
+                return True
+            if "Requirement already satisfied" in (res.stdout or ""):
+                return True
+            return False
+
         def _run_update():
             try:
-                cmd = [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"]
-                res = subprocess.run(cmd, capture_output=True, text=True)
-                stdout_tail = res.stdout[-300:] if res.stdout else "(空)"
-                self._dbg("更新yt-dlp", f"pip stdout tail: {stdout_tail}")
-                if res.stderr:
-                    self._dbg("更新yt-dlp", f"pip stderr: {res.stderr[:200]}")
-                if "Successfully installed" in res.stdout:
+                # 策略1: 普通 pip
+                res = _run_one_cmd([sys.executable, "-m", "pip", "install", "-U", "yt-dlp"])
+                if _is_success(res):
                     return True, res.stdout
-                elif "Requirement already satisfied" in res.stdout:
-                    return False, "Already latest (已是最新)"
-                return False, res.stderr or "(无输出)"
+
+                # 策略2: 检测 PEP 668, 用 --break-system-packages 回退
+                combined = (res.stdout or "") + (res.stderr or "")
+                if "externally-managed" in combined or "externally managed" in combined.lower():
+                    self._dbg("更新yt-dlp", "检测到 PEP 668 限制, 尝试 --break-system-packages")
+                    res = _run_one_cmd([sys.executable, "-m", "pip", "install", "-U",
+                                        "--break-system-packages", "yt-dlp"])
+                    if _is_success(res):
+                        return True, res.stdout
+
+                # 策略3: pipx
+                self._dbg("更新yt-dlp", "尝试 pipx upgrade")
+                try:
+                    res = _run_one_cmd(["pipx", "upgrade", "yt-dlp"])
+                    if _is_success(res):
+                        return True, res.stdout
+                except Exception:
+                    pass
+
+                return False, (res.stderr or res.stdout or "(无输出)")
             except Exception as e:
                 return False, str(e)
 
@@ -173,9 +206,8 @@ class YtDlpPlugin(Star):
         返回 dict:
           成功: {'success': True, 'is_playlist': ..., 'title': ..., ...}
           失败: {'success': False, 'error': str, 'error_type': str}
-        不再返回 None —— 调用方可以拿到真实错误原因
         """
-        self._dbg("解析信息", f"URL: {url[:100]}")
+        self._dbg("解析信息", f"URL: {url[:120]}")
         opts = {
             "quiet": True, "no_warnings": True, "nocheckcertificate": True,
             "extract_flat": "in_playlist"
@@ -204,8 +236,8 @@ class YtDlpPlugin(Star):
             sz = info.get('filesize') or info.get('filesize_approx')
             self._dbg("解析信息",
                 f"✅ 单视频: '{info.get('title', '?')}', "
-                f"大小: {self._format_size(sz)}, "
-                f"extractor: {info.get('extractor_key', '?')}")
+                f"大小={self._format_size(sz)}, "
+                f"extractor={info.get('extractor_key', '?')}")
             return {
                 'success': True,
                 'is_playlist': False,
@@ -248,7 +280,7 @@ class YtDlpPlugin(Star):
             self._dbg("核心处理", "空URL, 直接返回")
             return
 
-        self._dbg("核心处理", f"开始: url={url[:100]}, method={method}, ctype={ctype}")
+        self._dbg("核心处理", f"开始: url={url[:120]}, method={method}, ctype={ctype}")
 
         # 1. 检查是否包含确认参数
         confirmed = False
@@ -265,11 +297,9 @@ class YtDlpPlugin(Star):
         info = await self._get_video_info_safe(url)
 
         if not info.get('success'):
-            # --- 解析失败: 暴露真实错误 + 尝试自动更新后重试 ---
             err_msg = info.get('error', '未知错误')
             err_type = info.get('error_type', 'Exception')
 
-            # 发送详细错误到聊天
             yield event.plain_result(
                 f"❌ 解析失败\n"
                 f"📌 错误类型: {err_type}\n"
@@ -284,23 +314,49 @@ class YtDlpPlugin(Star):
                 yield event.plain_result(f"✅ yt-dlp 已更新到最新版, 正在重试解析...")
                 self._dbg("核心处理", "yt-dlp 更新成功, 重试解析")
             else:
-                yield event.plain_result(f"⚠️ yt-dlp 已是最新 ({update_log[:100]})，无需更新")
+                log_tail = (update_log or "")[-200:]
+                yield event.plain_result(
+                    f"⚠️ 自动更新未成功\n"
+                    f"📌 详情: {log_tail}"
+                )
 
             # 重试一次
             self._dbg("核心处理", "第2次尝试解析...")
             info = await self._get_video_info_safe(url)
 
         if not info.get('success'):
-            # 重试后仍然失败
+            # 重试后仍然失败 —— 根据错误类型给出针对性建议
             err_msg = info.get('error', '未知错误')
+            err_lower = err_msg.lower()
+
+            site_hint = ""
+            if "412" in err_msg or "precondition" in err_lower:
+                site_hint = (
+                    "\n   ⚠️ B站 412 错误: 你的 yt-dlp 版本太旧\n"
+                    "   👉 请在服务器上执行:\n"
+                    "      sudo python3 -m pip install -U --pre --break-system-packages \"yt-dlp[default]\"\n"
+                    "      (--pre 会安装最新的 nightly 版, 因为 stable 版未修复此问题)\n"
+                    "      然后重启 AstrBot"
+                )
+            elif "403" in err_msg or "forbidden" in err_lower:
+                site_hint = (
+                    "\n   ⚠️ HTTP 403: 可能需要 cookie 或代理\n"
+                    "   👉 尝试在 WebUI 开启代理"
+                )
+            elif "externally-managed" in err_lower:
+                site_hint = (
+                    "\n   ⚠️ Debian PEP 668 限制了 pip 安装\n"
+                    "   👉 请加 --break-system-packages 参数"
+                )
+
             yield event.plain_result(
                 f"❌ 重试后仍然失败\n"
-                f"📌 最终错误: {err_msg[:300]}\n\n"
-                f"💡 可能原因:\n"
-                f"  1. 目标网站更新了反爬机制 (yt-dlp 尚未适配)\n"
+                f"📌 最终错误: {err_msg[:300]}"
+                f"{site_hint}\n"
+                f"💡 通用排查:\n"
+                f"  1. 目标网站更新了反爬 (yt-dlp 需更新)\n"
                 f"  2. 网络不通 / 代理未生效\n"
-                f"  3. 链接已失效或需要登录\n\n"
-                f"🔧 建议: 在服务器终端执行 `pip install -U yt-dlp` 手动更新后重启"
+                f"  3. 链接已失效或需要登录"
             )
             return
 
@@ -318,7 +374,7 @@ class YtDlpPlugin(Star):
             self._dbg("核心处理", f"播放列表分支: count={count}, title={title}")
 
             if not confirmed:
-                self._dbg("核心处理", "播放列表未确认, 提示用户")
+                self._dbg("核心处理", "播放列表未确认")
                 yield event.plain_result(
                     f"📂 检测到播放列表:【{title}】\n"
                     f"🔢 包含视频数: {count} 个\n\n"
@@ -378,9 +434,16 @@ class YtDlpPlugin(Star):
                 self.logger.info("未找到 pyzipper，正在自动安装...")
                 self._dbg("核心处理", "pyzipper 未安装, 自动安装中...")
                 yield event.plain_result("⚙️ 首次运行正在安装加密依赖库...")
-                await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: subprocess.run([sys.executable, "-m", "pip", "install", "pyzipper"], capture_output=True)
-                )
+
+                def _install_pyzipper():
+                    # PEP 668 兼容: 先普通安装, 失败则加 --break-system-packages
+                    cmd = [sys.executable, "-m", "pip", "install", "pyzipper"]
+                    res = subprocess.run(cmd, capture_output=True, text=True)
+                    if res.returncode != 0 and "externally-managed" in (res.stderr or ""):
+                        cmd.append("--break-system-packages")
+                        subprocess.run(cmd, capture_output=True)
+
+                await asyncio.get_running_loop().run_in_executor(None, _install_pyzipper)
                 import pyzipper
                 self._dbg("核心处理", "pyzipper 安装完成")
 
@@ -388,7 +451,8 @@ class YtDlpPlugin(Star):
             zip_path = os.path.join(self.temp_dir, zip_name)
 
             def _do_encrypted_zip():
-                with pyzipper.AESZipFile(zip_path, 'w', compression=pyzipper.ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as zf:
+                with pyzipper.AESZipFile(zip_path, 'w', compression=pyzipper.ZIP_DEFLATED,
+                                         encryption=pyzipper.WZ_AES) as zf:
                     zf.setpassword(b"123456")
                     for f in files:
                         zf.write(f, os.path.basename(f))
@@ -397,7 +461,7 @@ class YtDlpPlugin(Star):
             self._dbg("核心处理", f"加密ZIP: {zip_name}")
 
             shutil.rmtree(playlist_folder)
-            self._dbg("核心处理", f"清理播放列表目录")
+            self._dbg("核心处理", "清理播放列表目录")
             final_path = zip_path
             video_title_real = f"Playlist_{title}"
             method = "file"
@@ -421,8 +485,7 @@ class YtDlpPlugin(Star):
             fmt_a = "bestaudio[ext=m4a]/bestaudio"
 
             self._dbg("核心处理",
-                f"画质: {limit}, h264: {prefer_h264}, "
-                f"v_fmt: {fmt_v}, a_fmt: {fmt_a}")
+                f"画质: {limit}, h264: {prefer_h264}, v_fmt: {fmt_v}, a_fmt: {fmt_a}")
 
             try:
                 if ctype == "audio_only":
@@ -434,11 +497,11 @@ class YtDlpPlugin(Star):
                     self._dbg("核心处理", "下载视频流...")
                     v_path, v_info = await self._download_stream(url, fmt_v, v_tmpl)
                     video_title_real = v_info.get('title', 'video')
-                    self._dbg("核心处理", f"视频流: {os.path.basename(v_path)}")
+                    self._dbg("核心处理", f"视频流完成: {os.path.basename(v_path)}")
 
                     self._dbg("核心处理", "下载音频流...")
                     a_path, a_info = await self._download_stream(url, fmt_a, a_tmpl)
-                    self._dbg("核心处理", f"音频流: {os.path.basename(a_path)}")
+                    self._dbg("核心处理", f"音频流完成: {os.path.basename(a_path)}")
 
                     yield event.plain_result(f"⚙️ 合并中...")
                     out_path = os.path.join(self.temp_dir, f"final_{ts}.mp4")
@@ -447,7 +510,6 @@ class YtDlpPlugin(Star):
                     temp_files = [v_path, a_path]
                     self._dbg("核心处理", f"合并输出: {os.path.basename(final_path)}")
             except Exception as e:
-                err_str = str(e).lower()
                 self._dbg("核心处理", f"下载/合并异常: {e}")
                 yield event.plain_result(f"❌ 下载错误: {e}")
                 updated, log = await self._try_update_ytdlp()
@@ -462,7 +524,7 @@ class YtDlpPlugin(Star):
             return
 
         fsize_mb = os.path.getsize(final_path) / (1024 * 1024)
-        d = self._dbg_chat(event, f"📦 步骤N: 文件就绪, {fsize_mb:.1f}MB, 路径: {os.path.basename(final_path)}")
+        d = self._dbg_chat(event, f"📦 文件就绪: {fsize_mb:.1f}MB, {os.path.basename(final_path)}")
         if d: yield d
         self._dbg("核心处理", f"最终文件: {os.path.basename(final_path)}, {fsize_mb:.1f}MB")
 
@@ -541,7 +603,7 @@ class YtDlpPlugin(Star):
     @command("download")
     async def cmd_download_file(self, event: AstrMessageEvent, url: str = ""):
         raw = event.message_str
-        self._dbg("命令/download", f"raw: {raw[:100]}")
+        self._dbg("命令/download", f"raw: {raw[:120]}")
         full_url = url
         for prefix in ["/download ", "download "]:
             if prefix in raw:
@@ -549,14 +611,14 @@ class YtDlpPlugin(Star):
                 break
         if "--y" not in full_url and "--y" in raw:
             full_url = full_url + " --y"
-        self._dbg("命令/download", f"url: {full_url[:100]}")
+        self._dbg("命令/download", f"url: {full_url[:120]}")
         async for res in self._core_download_handler(event, full_url, "file", "merged"):
             yield res
 
     @command("video")
     async def cmd_download_video(self, event: AstrMessageEvent, url: str = ""):
         raw = event.message_str
-        self._dbg("命令/video", f"raw: {raw[:100]}")
+        self._dbg("命令/video", f"raw: {raw[:120]}")
         full_url = url
         for prefix in ["/video ", "video "]:
             if prefix in raw:
@@ -564,7 +626,7 @@ class YtDlpPlugin(Star):
                 break
         if "--y" not in full_url and "--y" in raw:
             full_url = full_url + " --y"
-        self._dbg("命令/video", f"url: {full_url[:100]}")
+        self._dbg("命令/video", f"url: {full_url[:120]}")
         async for res in self._core_download_handler(event, full_url, "video", "merged"):
             yield res
 
@@ -572,7 +634,7 @@ class YtDlpPlugin(Star):
     async def cmd_get_direct_url(self, event: AstrMessageEvent, url: str = ""):
         """提取视频直链，不下载"""
         raw = event.message_str
-        self._dbg("命令/直链", f"raw: {raw[:100]}")
+        self._dbg("命令/直链", f"raw: {raw[:120]}")
         full_url = url
         for prefix in ["/直链 ", "直链 "]:
             if prefix in raw:
@@ -583,7 +645,7 @@ class YtDlpPlugin(Star):
             yield event.plain_result("❌ 请提供视频链接，例如: /直链 https://www.youtube.com/watch?v=xxx")
             return
 
-        self._dbg("命令/直链", f"url: {full_url[:100]}")
+        self._dbg("命令/直链", f"url: {full_url[:120]}")
         yield event.plain_result("⏳ 正在解析直链，请稍候...")
 
         opts = {
