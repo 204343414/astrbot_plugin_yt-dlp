@@ -96,7 +96,7 @@
                 "description": "Cookies 文件路径",
                 "type": "string",
                 "default": "",
-                "hint": "如果 YouTube 弹 'Sign in to confirm you're not a bot'，导出浏览器 cookies 后填入路径。获取方法: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp"
+                "hint": "cookies.txt 的路径。支持绝对路径 (/root/cookies.txt) 或相对路径 (cookies.txt，放在插件目录下)。留空则不使用 cookie。获取方法: Chrome 安装扩展 'Get cookies.txt LOCALLY' → 打开 YouTube 登录 → 导出 → 传到服务器"
             }
         }
     }
