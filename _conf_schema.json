@@ -25,7 +25,11 @@
                 "description": "最高画质",
                 "type": "string",
                 "default": "720p",
-                "options": ["480p", "720p", "1080p"],
+                "options": [
+                    "480p",
+                    "720p",
+                    "1080p"
+                ],
                 "hint": "限制视频最高画质，画质越高文件越大，可能发送失败"
             },
             "max_size_mb": {
@@ -81,6 +85,18 @@
                 "type": "bool",
                 "default": false,
                 "hint": "开启后会在控制台输出每一步的详细日志，用于排查问题。正常使用时请保持关闭。"
+            }
+        }
+    },
+    "youtube": {
+        "description": "YouTube 设置 (反爬 / Cookie)",
+        "type": "object",
+        "items": {
+            "cookies_path": {
+                "description": "Cookies 文件路径",
+                "type": "string",
+                "default": "",
+                "hint": "如果 YouTube 弹 'Sign in to confirm you're not a bot'，导出浏览器 cookies 后填入路径。获取方法: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp"
             }
         }
     }
