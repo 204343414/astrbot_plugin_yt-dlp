@@ -119,28 +119,44 @@ class YtDlpPlugin(Star):
 
     # ======= 自动更新 (PEP 668 兼容) =======
     async def _try_update_ytdlp(self):
+        """三级回退：stable → --break-system-packages → nightly (--pre)"""
         self.logger.info("尝试自动更新 yt-dlp...")
         def _run():
             try:
-                base = [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"]
-                r = subprocess.run(base, capture_output=True, text=True)
-                out = r.stdout or ""
-                if "Successfully installed" in out or "Requirement already satisfied" in out:
-                    return True, out
-                combined = out + (r.stderr or "")
-                if "externally-managed" in combined:
-                    r = subprocess.run(base + ["--break-system-packages"], capture_output=True, text=True)
-                    out2 = r.stdout or ""
-                    if "Successfully installed" in out2 or "Requirement already satisfied" in out2:
-                        return True, out2
-                # 412/B站等需 nightly 版 → 加 --pre
-                self._dbg("更新", "stable 不够, 尝试 nightly (--pre)")
-                r = subprocess.run(base + ["--pre", "--break-system-packages", "yt-dlp[default]"],
-                                   capture_output=True, text=True)
-                out3 = r.stdout or ""
-                if "Successfully installed" in out3 or "Requirement already satisfied" in out3:
-                    return True, out3
-                return False, r.stderr or out
+                def _pip(args, desc):
+                    self._dbg("更新", f"尝试: {desc}")
+                    r = subprocess.run(args, capture_output=True, text=True)
+                    out = (r.stdout or "") + (r.stderr or "")
+                    self._dbg("更新", f"{desc} -> {out[-200:]}")
+                    installed = "Successfully installed" in (r.stdout or "")
+                    satisfied = "Requirement already satisfied" in (r.stdout or "")
+                    return r, installed, satisfied
+
+                py = [sys.executable, "-m", "pip", "install", "-U"]
+
+                # 第1步: stable
+                r, installed, satisfied = _pip(py + ["yt-dlp"], "stable")
+                if installed:
+                    return True, r.stdout
+
+                # 第2步: PEP 668
+                if "externally-managed" in (r.stdout or "") + (r.stderr or ""):
+                    r, installed, satisfied = _pip(
+                        py + ["--break-system-packages", "yt-dlp"], "break-system")
+                    if installed:
+                        return True, r.stdout
+
+                # 第3步: nightly (总是尝试, 因为 stable 可能没修已知bug)
+                r, installed, satisfied = _pip(
+                    py + ["--pre", "--break-system-packages", "yt-dlp[default]"], "nightly")
+                if installed or satisfied:
+                    return True, r.stdout or "nightly OK"
+
+                # 如果 stable already satisfied 且 nightly 也 satisfied → 已是最新
+                if satisfied:
+                    return True, r.stdout or "已是最新"
+
+                return False, r.stderr or r.stdout or "未知错误"
             except Exception as e:
                 return False, str(e)
         return await asyncio.get_running_loop().run_in_executor(None, _run)
@@ -167,6 +183,8 @@ class YtDlpPlugin(Star):
     # ======= 解析视频信息 =======
     async def _get_video_info_safe(self, url):
         self._dbg("解析", f"URL: {url[:120]}")
+        # 排查用：明确打印 cookie/proxy 状态
+        self._dbg("解析", f"proxy={self.proxy_enabled} cookie={'✓ '+self.cookies_path if self.cookies_path else '✗ 未找到'}")
         opts = self._inject({
             "quiet": True, "no_warnings": True, "nocheckcertificate": True,
             "extract_flat": "in_playlist",
@@ -206,11 +224,13 @@ class YtDlpPlugin(Star):
     def _analyze_error(self, err_msg):
         e = err_msg.lower()
         if "sign in to confirm" in e or "not a bot" in e:
+            cookie_stat = "✅ 已配置" if self.cookies_path else "❌ 未配置"
             return (
                 "\n   ⚠️ YouTube 反爬：VPS IP 被标记\n"
-                "   👉 插件已使用 Android 客户端 + cookie 双保险\n"
-                "   👉 如果还失败，需在 WebUI 填入 cookies.txt 路径\n"
-                "   📖 获取 cookie: 见下面回复"
+                f"   📌 Cookie 状态: {cookie_stat}\n"
+                "   👉 未配置的话: WebUI→插件配置→youtube.cookies_path 填入路径\n"
+                "   👉 已配置但无效: 检查 cookies.txt 是否过期/格式不对\n"
+                "   📖 获取 cookie: Chrome扩展 'Get cookies.txt LOCALLY'"
             )
         if "412" in err_msg or "precondition" in e:
             return (
