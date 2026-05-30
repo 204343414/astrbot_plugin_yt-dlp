@@ -133,6 +133,13 @@ class YtDlpPlugin(Star):
                     out2 = r.stdout or ""
                     if "Successfully installed" in out2 or "Requirement already satisfied" in out2:
                         return True, out2
+                # 412/B站等需 nightly 版 → 加 --pre
+                self._dbg("更新", "stable 不够, 尝试 nightly (--pre)")
+                r = subprocess.run(base + ["--pre", "--break-system-packages", "yt-dlp[default]"],
+                                   capture_output=True, text=True)
+                out3 = r.stdout or ""
+                if "Successfully installed" in out3 or "Requirement already satisfied" in out3:
+                    return True, out3
                 return False, r.stderr or out
             except Exception as e:
                 return False, str(e)
